@@ -1,0 +1,56 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "1. Smoke test (synthetic + real dataset)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/tests/smoke_test.py",
+      "args": ["--dataset-dir", "${workspaceFolder}/dataset/handwriting_ocr"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "2. Inspect dataset",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/training/inspect_dataset.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "3a. Train - quick pipeline check (2 epochs, subset)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/training/train_classifier.py",
+      "args": ["--epochs", "2", "--freeze-epochs", "1", "--max-train-samples", "780", "--max-val-samples", "234", "--output-dir", "${workspaceFolder}/outputs/quick_check"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "3b. Train - full run (ResNet18, 40 epochs)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/training/train_classifier.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "4. Evaluate on test split",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/training/evaluate_classifier.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "5. Predict the image open in the editor",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/inference/predict.py",
+      "args": ["--image", "${file}"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}
