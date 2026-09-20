@@ -21,6 +21,14 @@ def _binary_ink(image: Image.Image) -> np.ndarray:
         # Remove isolated speckles.
         kernel = np.ones((2, 2), np.uint8)
         binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+        # Remove camera speckles and tiny paper artifacts before projection.
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
+        cleaned = np.zeros_like(binary)
+        for component in range(1, count):
+            area = stats[component, cv2.CC_STAT_AREA]
+            if area >= 12:
+                cleaned[labels == component] = 255
+        binary = cleaned
         return binary > 0
     except ImportError:
         return gray < 190
@@ -31,15 +39,109 @@ def _runs(mask: np.ndarray, min_run: int = 2, gap: int = 0):
     if gap:
         kernel = np.ones(gap + 1, dtype=np.uint8)
         mask = np.convolve(mask.astype(np.uint8), kernel, mode="same") > 0
-    starts = np.flatnonzero(mask & ~np.r_[False, mask[:-1]])
-    ends = np.flatnonzero(~mask & np.r_[mask[:-1], False])
-    if mask[-1]:
-        ends = np.r_[ends, len(mask)]
     out = []
-    for s, e in zip(starts, ends):
-        if e - s >= min_run:
-            out.append((int(s), int(e)))
+    start = None
+    for index, value in enumerate(mask.tolist()):
+        if value and start is None:
+            start = index
+        elif not value and start is not None:
+            if index - start >= min_run:
+                out.append((start, index))
+            start = None
+    if start is not None and len(mask) - start >= min_run:
+        out.append((start, len(mask)))
     return out
+
+
+def _merge_boxes(boxes: list[tuple[int, int, int, int]], overlap: float = 0.75):
+    kept = []
+    for box in sorted(boxes, key=lambda item: (item[1], item[0])):
+        x1, y1, x2, y2 = box
+        if any(
+            max(0, min(x2, kx2) - max(x1, kx1))
+            * max(0, min(y2, ky2) - max(y1, ky1))
+            / max(1, (x2 - x1) * (y2 - y1)) > overlap
+            for kx1, ky1, kx2, ky2 in kept
+        ):
+            continue
+        kept.append(box)
+    return kept
+
+
+def find_prescription_lines(
+    image: Image.Image,
+    min_height: int = 8,
+    line_gap: int = 5,
+    padding: int = 8,
+) -> list[dict]:
+    """Find full-page handwriting bands in top-to-bottom reading order."""
+    if image.width < 2 or image.height < 2:
+        raise ValueError("Prescription image is empty or too small to segment")
+    ink = _binary_ink(image)
+    height, width = ink.shape
+    row_counts = ink.sum(axis=1)
+    row_mask = row_counts >= max(1, int(width * 0.0015))
+    runs = _runs(row_mask, min_run=max(3, min_height // 2), gap=0)
+    lines = []
+    for line_id, (top, bottom) in enumerate(runs, start=1):
+        ys, xs = np.where(ink[max(0, top - padding):min(height, bottom + padding)])
+        if xs.size == 0:
+            continue
+        left = max(0, int(xs.min()) - padding)
+        right = min(width, int(xs.max()) + padding + 1)
+        top_box = max(0, top - padding)
+        bottom_box = min(height, bottom + padding)
+        lines.append({
+            "line_id": line_id,
+            "bbox": [left, top_box, right, bottom_box],
+            "reading_order": line_id,
+        })
+    if not lines and ink.any():
+        ys, xs = np.where(ink)
+        lines.append({
+            "line_id": 1,
+            "bbox": [
+                max(0, int(xs.min()) - padding), max(0, int(ys.min()) - padding),
+                min(width, int(xs.max()) + padding + 1), min(height, int(ys.max()) + padding + 1),
+            ],
+            "reading_order": 1,
+        })
+    return lines
+
+
+def find_prescription_regions(
+    image: Image.Image,
+    lines: list[dict] | None = None,
+    padding: int = 8,
+    word_gap: int = 22,
+) -> list[dict]:
+    """Find conservative word/line regions while preserving page reading order."""
+    lines = lines if lines is not None else find_prescription_lines(image, padding=padding)
+    ink = _binary_ink(image)
+    height, width = ink.shape
+    regions = []
+    region_id = 1
+    for line in lines:
+        x1, y1, x2, y2 = line["bbox"]
+        band = ink[y1:y2, x1:x2]
+        columns = band.sum(axis=0)
+        runs = _runs(columns >= 1, min_run=3, gap=word_gap)
+        # Short or fragmented handwriting is safer as one line than as letters.
+        if not runs or len(runs) > 12:
+            runs = [(0, x2 - x1)]
+        for left, right in runs:
+            left_box = max(0, x1 + left - padding)
+            right_box = min(width, x1 + right + padding)
+            if right_box - left_box < max(18, int(width * 0.015)):
+                continue
+            regions.append({
+                "region_id": region_id,
+                "line_id": line["line_id"],
+                "bbox": [left_box, y1, right_box, y2],
+                "reading_order": len(regions) + 1,
+            })
+            region_id += 1
+    return regions
 
 
 def find_handwriting_regions(
@@ -55,63 +157,12 @@ def find_handwriting_regions(
     designed to avoid requiring bounding-box annotations while grouping nearby
     handwriting into readable crops.
     """
-    if image.width < 2 or image.height < 2:
-        raise ValueError("Prescription image is empty or too small to segment")
-    ink = _binary_ink(image)
-    h, w = ink.shape
-
-    # Horizontal projection -> text lines.
-    row_counts = ink.sum(axis=1)
-    row_mask = row_counts >= max(2, int(w * 0.002))
-    line_runs = _runs(row_mask, min_run=min_height, gap=line_gap)
-
-    regions = []
-    for top, bottom in line_runs:
-        band = ink[max(0, top-padding):min(h, bottom+padding), :]
-        col_counts = band.sum(axis=0)
-        # A larger gap separates words while preserving connected cursive letters.
-        col_mask = col_counts >= 1
-        word_runs = _runs(col_mask, min_run=3, gap=word_gap)
-
-        # If the line is too fragmented, retain the entire line.
-        if not word_runs or len(word_runs) > 16:
-            word_runs = [(0, w)]
-
-        for left, right in word_runs:
-            l = max(0, left - padding)
-            r = min(w, right + padding)
-            t = max(0, top - padding)
-            b = min(h, bottom + padding)
-            if r - l >= max(18, int(w * 0.02)) and b - t >= min_height:
-                regions.append((l, t, r, b))
-
-    if not regions and ink.any():
-        ys, xs = np.where(ink)
-        regions.append((
-            max(0, int(xs.min()) - padding),
-            max(0, int(ys.min()) - padding),
-            min(w, int(xs.max()) + padding + 1),
-            min(h, int(ys.max()) + padding + 1),
-        ))
-
-    # Deduplicate overlapping boxes, preferring larger boxes when nearly identical.
-    regions = sorted(regions, key=lambda box: (box[1], box[0], -(box[2]-box[0])))
-    kept = []
-    for box in regions:
-        x1, y1, x2, y2 = box
-        duplicate = False
-        for k in kept:
-            kx1, ky1, kx2, ky2 = k
-            ix1, iy1 = max(x1, kx1), max(y1, ky1)
-            ix2, iy2 = min(x2, kx2), min(y2, ky2)
-            inter = max(0, ix2-ix1) * max(0, iy2-iy1)
-            area = max(1, (x2-x1)*(y2-y1))
-            if inter / area > 0.75:
-                duplicate = True
-                break
-        if not duplicate:
-            kept.append(box)
-    return kept
+    lines = find_prescription_lines(
+        image, min_height=min_height, line_gap=line_gap, padding=padding
+    )
+    return [tuple(region["bbox"]) for region in find_prescription_regions(
+        image, lines, padding=padding, word_gap=word_gap
+    )]
 
 
 def save_region_crops(image: Image.Image, regions: list[tuple[int, int, int, int]], output_dir: str | Path) -> list[str]:

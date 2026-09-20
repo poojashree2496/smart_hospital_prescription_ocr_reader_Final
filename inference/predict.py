@@ -18,7 +18,7 @@ from src.preprocess import prepare_pil
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Predict a medicine from ONE handwritten medicine-name crop.")
-    parser.add_argument("--model", default=str(ROOT / "models" / "medicine_classifier" / "best.pt"))
+    parser.add_argument("--model", default=str(ROOT / "models" / "best.pt"))
     parser.add_argument("--image", required=True)
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--confidence-threshold", type=float, default=0.60)

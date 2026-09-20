@@ -199,8 +199,8 @@ def main() -> None:
         print(f"\nTEST  top-1 = {test['top1']:.4f}   top-3 = {test['top3']:.4f}   ({test['samples']} samples)")
     (output_dir / "metadata.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     import shutil
-    shutil.copy2(output_dir / "best.pt", ROOT / "models" / "medicine_classifier_best.pth")
-    print(f"Training complete. Best validation top-1: {best_val_acc:.4f} (epoch {best_epoch}). Checkpoint: {ROOT / 'models' / 'medicine_classifier_best.pth'}")
+    shutil.copy2(output_dir / "best.pt", ROOT / "models" / "best.pt")
+    print(f"Training complete. Best validation top-1: {best_val_acc:.4f} (epoch {best_epoch}). Checkpoint: {ROOT / 'models' / 'best.pt'}")
 
 
 if __name__ == "__main__":

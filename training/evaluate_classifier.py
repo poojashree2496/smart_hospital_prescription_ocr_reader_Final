@@ -74,7 +74,7 @@ def write_reports(result: dict, labels: list[str], output_dir: Path, split: str)
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate a medicine classifier on validation and test splits.")
     parser.add_argument("--dataset-dir", required=True)
-    parser.add_argument("--checkpoint", "--model", dest="checkpoint", default=str(ROOT / "models" / "medicine_classifier_best.pth"))
+    parser.add_argument("--checkpoint", "--model", dest="checkpoint", default=str(ROOT / "models" / "best.pt"))
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--split", choices=("validation", "test", "both"), default="both")
     parser.add_argument("--output-dir", default=str(ROOT / "outputs" / "evaluation"))
@@ -93,6 +93,20 @@ def main() -> None:
         metrics[split] = write_reports(result, labels, output_dir, split)
         print(f"{split}: top-1={result['top1']:.4f} top-3={result['top3']:.4f} top-5={result['top5']:.4f}")
     (output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    metadata = {
+        "architecture": checkpoint["architecture"],
+        "num_classes": checkpoint["num_classes"],
+        "class_names": checkpoint["labels"],
+        "checkpoint_path": str(Path(args.checkpoint)),
+        "checkpoint_epoch": checkpoint.get("epoch"),
+        "image_size": checkpoint["image_size"],
+        "preprocess_version": checkpoint["preprocess_version"],
+        "validation_metrics": metrics.get("validation"),
+        "test_metrics": metrics.get("test"),
+    }
+    (ROOT / "models" / "metadata.json").write_text(
+        json.dumps(metadata, indent=2), encoding="utf-8"
+    )
     print("Saved evaluation artifacts:", output_dir)
 
 

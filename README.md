@@ -1,6 +1,6 @@
 # Smart Hospital Handwritten Prescription OCR + Medicine Recognition
 
-A CPU-compatible student/research system that reads a full handwritten prescription image, proposes likely handwriting regions, runs TrOCR handwriting OCR, classifies medicine-name crops with a ResNet-18 model, fuses both signals, and writes review-aware JSON and text outputs.
+A CPU-compatible student/research system that accepts a complete handwritten prescription image, detects ordered text lines and regions, runs TrOCR handwriting OCR, classifies likely medicine regions with a ResNet-18 model, preserves dosage/instruction text, and writes review-aware JSON, text, crops, and an annotated page.
 
 This is not a medical device and is not a substitute for a doctor or pharmacist. OCR and medicine predictions can be wrong, handwriting can be ambiguous, and every result must be verified against the original prescription before medication is dispensed or administered. The system does not generate dosage recommendations.
 
@@ -14,7 +14,7 @@ full prescription -> preprocessing -> heuristic candidate regions
                                       |                     |
                                       +------ fusion -------+
                                              |
-                                    JSON + text + review flags
+                         structured JSON + text + review flags + annotation
 ```
 
 The dataset contains medicine handwriting samples, not fully annotated prescription pages. Classifier metrics are meaningful for medicine crops; full-page region detection is heuristic and is not clinically validated.
@@ -25,7 +25,8 @@ The dataset contains medicine handwriting samples, not fully annotated prescript
 - `src/dataset.py`, `src/lance_data.py`: Lance loading and dynamic `medicine_name` class mapping.
 - `src/model.py`, `src/preprocess.py`, `src/augment.py`: ResNet-18 and handwriting-focused preprocessing.
 - `src/fusion.py`: transparent OCR/classifier evidence combination and review policy.
-- `inference/segment.py`: adaptive-threshold candidate region generator and crop writer.
+- `inference/segment.py`: adaptive-threshold line/region detector and crop writer.
+- `src/page_preprocess.py`: non-destructive orientation, denoising, illumination, and contrast preprocessing.
 - `inference/prescription_pipeline.py`: full-page inference and output writer.
 - `training/train_classifier.py`: complete training run with validation model selection.
 - `training/evaluate_classifier.py`: validation/test metrics and reports.
@@ -65,7 +66,7 @@ This command uses all training and validation rows by default, selects the best 
   --batch-size 32
 ```
 
-The ResNet-18 uses ImageNet initialization when available, 96x256 grayscale-to-RGB inputs, mild handwriting-preserving augmentation, AdamW, cosine scheduling, and early stopping. The best checkpoint is written to `models/medicine_classifier_best.pth`. Class mappings are written to `models/class_to_idx.json` and `models/idx_to_class.json`; history is written to `outputs/training_history.json`.
+The ResNet-18 uses ImageNet initialization when available, 96x256 grayscale-to-RGB inputs, mild handwriting-preserving augmentation, AdamW, cosine scheduling, and early stopping. The best checkpoint is written to `models/best.pt`. Class mappings are written to `models/class_to_idx.json` and `models/idx_to_class.json`; history is written to `outputs/training_history.json` when available.
 
 Optional `--max-train-samples` and `--max-val-samples` are development-only switches. Do not use them for final training.
 
@@ -74,31 +75,32 @@ Optional `--max-train-samples` and `--max-val-samples` are development-only swit
 ```powershell
 & "C:\Users\pooja\AppData\Local\Python\pythoncore-3.14-64\python.exe" training\evaluate_classifier.py `
   --dataset-dir "C:\Users\pooja\OneDrive\Desktop\smart_hospital_prescription_ocr\dataset\handwriting_ocr" `
-  --checkpoint models\medicine_classifier_best.pth
+  --checkpoint "models\best.pt"
 ```
 
 The evaluator measures validation and test top-1, top-3, top-5, macro precision, recall, and F1. It writes `outputs/evaluation/metrics.json`, per-class reports, and confusion matrices. Accuracy is never assumed or fabricated; use the measured values.
 
-## Full Prescription Inference
+## Full Prescription Workflow
 
-After training:
+Give the pipeline one complete JPG, JPEG, PNG, or WebP prescription page:
 
 ```powershell
 & "C:\Users\pooja\AppData\Local\Python\pythoncore-3.14-64\python.exe" inference\prescription_pipeline.py `
-  --image "C:\path\to\prescription.jpg" `
-  --model models\medicine_classifier_best.pth
+  --image "PATH_TO_FULL_PRESCRIPTION.jpg"
 ```
 
-The pipeline loads TrOCR once and the classifier once, processes RGB PIL crops on CPU, and writes:
+The pipeline loads TrOCR once and the classifier once, preserves the original page, creates a normalized working copy, detects lines and regions in reading order, and writes:
 
 ```text
 outputs/prescription/prescription_text.txt
 outputs/prescription/medicine_names.txt
 outputs/prescription/result.json
+outputs/prescription/annotated_prescription.png
+outputs/prescription/lines/line_001.png
 outputs/prescription/crops/crop_001.png
 ```
 
-`result.json` includes each region bounding box, OCR text, classifier prediction, classifier confidence, top alternatives, OCR similarity, fusion score, and `needs_human_review`. Use `--no-ocr` only for classifier-only debugging.
+`prescription_text.txt` retains all non-empty OCR regions in page order. `medicine_names.txt` contains only confirmed medicine names. `result.json` includes lines, typed regions (`medicine`, `dosage`, `frequency`, `duration`, `instruction`, `other`, or `unknown`), OCR text, classifier evidence, `fusion_score`, structured dosage/frequency/duration/instruction fields, and prescription-level human review. The default classifier is `models/best.pt`; use `--model` only to override it. Use `--no-ocr` only for classifier-only debugging.
 
 A single crop can be inspected with `inference/predict.py`, and segmentation can be run independently with `inference/segment.py --image ... --output-dir outputs/prescription/crops`.
 
@@ -125,4 +127,4 @@ The tests cover dynamic mappings, preprocessing, segmentation crop writing, fusi
 
 ## Known Limitations
 
-The classifier is trained on isolated medicine handwriting examples, while a full prescription may contain lines, dosage instructions, stamps, tables, and overlapping text. Region proposals can miss or merge handwriting. TrOCR can hallucinate or misread text. Human verification is mandatory for any real-world use.
+The classifier is trained on isolated medicine handwriting examples, while a full prescription may contain lines, dosage instructions, stamps, tables, and overlapping text. The full-page line/region detector is heuristic and has not been validated on a clinically annotated prescription-page dataset. TrOCR can hallucinate or misread text, and a real full-prescription accuracy number is not established by the medicine dataset. Human verification is mandatory for every real-world result.

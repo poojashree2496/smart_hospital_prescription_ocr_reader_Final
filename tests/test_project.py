@@ -9,7 +9,7 @@ from unittest.mock import patch
 import numpy as np
 from PIL import Image
 
-from inference.segment import find_handwriting_regions, save_region_crops
+from inference.segment import find_handwriting_regions, find_prescription_lines, find_prescription_regions, save_region_crops
 from src.fusion import fuse_predictions, text_similarity
 from src.image_ops import prepare_word
 from src.lance_data import labels_from_rows
@@ -33,6 +33,20 @@ class ProjectTests(unittest.TestCase):
             paths = save_region_crops(image, regions, directory)
             self.assertEqual(len(paths), len(regions))
             self.assertTrue(Path(paths[0]).exists())
+
+    def test_multiline_prescription_regions_keep_reading_order(self):
+        image = Image.new("RGB", (900, 500), "white")
+        from PIL import ImageDraw
+        draw = ImageDraw.Draw(image)
+        draw.text((50, 60), "Patient Name", fill="black")
+        draw.text((50, 180), "Aceta 1-0-1 x 5 days", fill="black")
+        draw.text((50, 300), "Take after food", fill="black")
+        lines = find_prescription_lines(image)
+        regions = find_prescription_regions(image, lines)
+        self.assertGreaterEqual(len(lines), 3)
+        self.assertGreaterEqual(len(regions), 3)
+        self.assertEqual([line["line_id"] for line in lines], sorted(line["line_id"] for line in lines))
+        self.assertEqual([region["reading_order"] for region in regions], sorted(region["reading_order"] for region in regions))
 
     def test_fusion_and_similarity(self):
         result = fuse_predictions(
